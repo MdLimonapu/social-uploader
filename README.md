@@ -18,7 +18,8 @@ On the Upload page choose **Schedule** and pick a date and time (your Mac's loca
 
 ## 2c. How to use
 - **Upload page**: choose video, title, caption, tick platforms → Upload. You'll see a live status per platform.
-- **Watch folder**: put `myvideo.mp4` into `inbox/`. Optional `myvideo.txt` next to it: *line 1 = title, rest = caption/hashtags*. It posts to `WATCH_PLATFORMS` and then moves to `done/` (or `failed/` if every platform failed — check **Logs**).
+- **YouTube Shorts vs. YouTube (normal video)**: both use the same YouTube connection. *Shorts* checks the video is vertical and ≤ 3 min and adds `#Shorts`. *Normal video* skips those checks, never adds `#Shorts`, keeps your full title (max 100 chars) and caption as the description (max 5,000), and uses the optional **YouTube tags** field. Both use the YouTube visibility setting and upload in resumable 8 MB chunks streamed from disk, so long/large videos don't need much RAM.
+- **Watch folder**: put `myvideo.mp4` into `inbox/`. Optional `myvideo.txt` next to it: *line 1 = title, rest = caption/hashtags*. Optional lines `tags: a, b` (YouTube tags) and `schedule: …`. It posts to `WATCH_PLATFORMS` (`youtube` = Shorts, `youtube_video` = normal video) and then moves to `done/` (or `failed/` if every platform failed — check **Logs**).
 - **Jobs** page = history (kept until restart). **Logs** page = `logs/app.log`.
 - Disconnect a platform: delete its file in `tokens/`.
 

@@ -5,7 +5,8 @@ from pathlib import Path
 from .config import ROOT, env, log, VIDEO_EXT
 from .platforms import youtube, tiktok, meta, instagram
 
-PLATFORMS = ["youtube", "tiktok", "instagram", "facebook"]
+# "youtube" = YouTube Shorts (checked + #Shorts), "youtube_video" = normal long-form YouTube video (same Google login)
+PLATFORMS = ["youtube", "youtube_video", "tiktok", "instagram", "facebook"]
 DB = ROOT / "data" / "jobs.json"
 JOBS: dict = {}
 PUBLIC_FILES: dict = {}
@@ -33,6 +34,7 @@ def load_jobs():
 def status():
     return {
         "youtube": {"configured": youtube.configured(), "connected": youtube.connected()},
+        "youtube_video": {"configured": youtube.configured(), "connected": youtube.connected()},
         "tiktok": {"configured": tiktok.configured(), "connected": tiktok.connected()},
         "facebook": {"configured": meta.configured(), "connected": meta.fb_connected()},
         "instagram": {"configured": instagram.configured() or meta.configured(), "connected": instagram.connected() or meta.ig_connected(),
@@ -46,8 +48,9 @@ def _public_url(path: Path, override=""):
     tok = secrets.token_urlsafe(24); PUBLIC_FILES[tok] = path
     return f"{base}/media/{tok}/{path.name}"
 
-def upload_one(p, path, title, caption, public_url, yt_privacy=None):
+def upload_one(p, path, title, caption, public_url, yt_privacy=None, yt_tags=None):
     if p == "youtube": return youtube.upload(path, title, caption, yt_privacy)
+    if p == "youtube_video": return youtube.upload(path, title, caption, yt_privacy, shorts=False, tags=yt_tags)
     if p == "tiktok": return tiktok.upload(path, title, caption)
     if p == "facebook": return meta.upload_facebook(path, title, caption)
     if p == "instagram":   # default: Instagram Login (no FB Page); fallback: FB-Page-linked IG account
@@ -80,7 +83,7 @@ def run_job(jid):
     for p in j["platforms"]:
         j["results"][p] = {"state": "running"}; save_jobs()
         try:
-            r = upload_one(p, path, j["title"], j["caption"], j.get("public_url", ""), j.get("yt_privacy"))
+            r = upload_one(p, path, j["title"], j["caption"], j.get("public_url", ""), j.get("yt_privacy"), j.get("yt_tags"))
             j["results"][p] = {"state": "done", **r}; log.info("[%s] %s OK %s", jid, p, r)
         except Exception as e:
             j["results"][p] = {"state": "error", "error": str(e)}; log.exception("[%s] %s failed", jid, p)
@@ -91,11 +94,12 @@ def run_job(jid):
     _cleanup(j)
 
 def create_job(path: Path, title, caption, platforms, public_url="", source="web", run_at: float | None = None,
-               move_after=False, caption_file=None, start=True, yt_privacy=None):
+               move_after=False, caption_file=None, start=True, yt_privacy=None, yt_tags=None):
     jid = uuid.uuid4().hex[:8]
     with _lock:
         JOBS[jid] = {"id": jid, "file": path.name, "path": str(path), "title": title, "caption": caption,
                      "platforms": platforms, "public_url": public_url, "source": source, "yt_privacy": yt_privacy,
+                     "yt_tags": youtube.parse_tags(yt_tags) if yt_tags else [],
                      "state": "scheduled" if run_at else "queued", "run_at": run_at,
                      "created": time.strftime("%Y-%m-%d %H:%M:%S"), "move_after": move_after,
                      "caption_file": str(caption_file) if caption_file else None,
@@ -146,33 +150,38 @@ def scheduler_loop(stop: threading.Event):
 
 # ---------- watch folder ----------
 def _caption_for(video: Path):
-    """.txt: line 1 = title, rest = caption. Optional line 'schedule: YYYY-MM-DD HH:MM'."""
-    txt = video.with_suffix(".txt"); run_at = None
-    if not txt.exists(): return video.stem, "", None, None
+    """.txt: line 1 = title, rest = caption. Optional lines 'schedule: YYYY-MM-DD HH:MM' and 'tags: a, b' (YouTube)."""
+    title, cap, txt, run_at, _ = _caption_and_tags(video)
+    return title, cap, txt, run_at
+
+def _caption_and_tags(video: Path):
+    txt = video.with_suffix(".txt"); run_at = None; tags = []
+    if not txt.exists(): return video.stem, "", None, None, []
     lines = []
     for ln in txt.read_text(encoding="utf-8").strip().splitlines():
         if ln.lower().startswith("schedule:"):
             try: run_at = parse_local(ln.split(":", 1)[1])
             except ValueError: log.warning("bad schedule line in %s: %s", txt.name, ln)
+        elif ln.lower().startswith("tags:"): tags = youtube.parse_tags(ln.split(":", 1)[1])
         else: lines.append(ln)
     title = lines[0] if lines else video.stem
-    return title, ("\n".join(lines[1:]).strip() or title), txt, run_at
+    return title, ("\n".join(lines[1:]).strip() or title), txt, run_at, tags
 
 def watch_loop(stop: threading.Event):
     inbox, seen, busy = ROOT / "inbox", {}, set()
     while not stop.is_set():
-        plats = [p.strip() for p in env("WATCH_PLATFORMS", ",".join(PLATFORMS)).split(",") if p.strip() in PLATFORMS]
+        plats = [p.strip() for p in env("WATCH_PLATFORMS", "youtube,tiktok,instagram,facebook").split(",") if p.strip() in PLATFORMS]
         for v in sorted(inbox.iterdir()):
             if v.suffix.lower() not in VIDEO_EXT or v in busy: continue
             size = v.stat().st_size
             if seen.get(v) != size: seen[v] = size; continue
-            title, cap, txt, run_at = _caption_for(v); busy.add(v)
+            title, cap, txt, run_at, tags = _caption_and_tags(v); busy.add(v)
             if run_at and run_at > time.time():   # park the file in uploads/ until it's due
                 nv = ROOT / "uploads" / f"{int(time.time())}_{v.name}"; shutil.move(str(v), nv)
                 if txt: shutil.move(str(txt), ROOT / "done" / txt.name)
-                create_job(nv, title, cap, plats, source="watch", run_at=run_at)
+                create_job(nv, title, cap, plats, source="watch", run_at=run_at, yt_tags=tags)
                 log.info("Watch: scheduled %s for %s", v.name, fmt_local(run_at))
             else:
                 log.info("Watch: posting %s to %s", v.name, plats)
-                create_job(v, title, cap, plats, source="watch", move_after=True, caption_file=txt)
+                create_job(v, title, cap, plats, source="watch", move_after=True, caption_file=txt, yt_tags=tags)
         stop.wait(int(env("WATCH_INTERVAL_SECONDS", "15") or 15))

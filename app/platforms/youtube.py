@@ -57,27 +57,63 @@ def default_privacy():
 def check_forced_private(requested, actual):
     return FORCED_PRIVATE_WARNING if requested in ("public", "unlisted") and actual == "private" else None
 
-def build_body(title, caption, privacy=None):
-    from .shorts import tag_title, tag_description
-    return {"snippet": {"title": tag_title(title), "description": tag_description(caption), "categoryId": "22"},
+def parse_tags(tags) -> list[str]:
+    """'a, b,#c' or ['a','b'] -> ['a','b','c'] (YouTube allows ~500 chars of tags in total)."""
+    if isinstance(tags, str): tags = tags.replace("\n", ",").split(",")
+    out, total = [], 0
+    for t in tags or []:
+        t = str(t).strip().lstrip("#").replace("<", "").replace(">", "").strip()
+        if not t or t in out: continue
+        if total + len(t) + 1 > 500: break
+        out.append(t); total += len(t) + 1
+    return out
+
+def build_body(title, caption, privacy=None, shorts=True, tags=None):
+    """shorts=True: Shorts upload (#Shorts added). shorts=False: normal long-form video, title/description untouched."""
+    if shorts:
+        from .shorts import tag_title, tag_description
+        t, d = tag_title(title), tag_description(caption)
+    else:
+        t, d = ((title or "Untitled").strip() or "Untitled")[:100], (caption or "").strip()[:5000]
+    snippet = {"title": t, "description": d, "categoryId": "22"}
+    if tags and (tl := parse_tags(tags)): snippet["tags"] = tl
+    return {"snippet": snippet,
             "status": {"privacyStatus": privacy if privacy in VISIBILITY else default_privacy(), "selfDeclaredMadeForKids": False}}
 
-def upload(path: Path, title: str, caption: str, privacy: str | None = None):
+RETRY_STATUS = {500, 502, 503, 504}
+
+def _next_chunk(req, tries=6):
+    """One resumable-upload step with retries on transient errors (the upload resumes where it stopped)."""
+    import time
+    from googleapiclient.errors import HttpError
+    for i in range(tries):
+        try: return req.next_chunk()
+        except HttpError as e:
+            if getattr(e.resp, "status", None) not in RETRY_STATUS or i == tries - 1: raise
+            err = e
+        except (ConnectionError, TimeoutError, OSError) as e:
+            if i == tries - 1: raise
+            err = e
+        log.warning("YouTube chunk failed (%s), retrying in %ss", err, 2 ** i); time.sleep(2 ** i)
+
+def upload(path: Path, title: str, caption: str, privacy: str | None = None, shorts: bool = True, tags=None):
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaFileUpload
-    from .shorts import check_short
-    ok, msg = check_short(path)
-    if not ok: raise RuntimeError(msg)
-    if msg.startswith("warning"): log.warning("YouTube Shorts: %s", msg)
+    if shorts:
+        from .shorts import check_short
+        ok, msg = check_short(path)
+        if not ok: raise RuntimeError(msg)
+        if msg.startswith("warning"): log.warning("YouTube Shorts: %s", msg)
     creds = credentials()
     if not creds:
         raise RuntimeError("YouTube not connected")
     yt = build("youtube", "v3", credentials=creds, cache_discovery=False)
+    # Resumable upload streamed from disk in 8 MB chunks: RAM use stays small even for multi-GB videos.
     media = MediaFileUpload(str(path), chunksize=8 * 1024 * 1024, resumable=True)
-    req = yt.videos().insert(part="snippet,status", body=(body := build_body(title, caption, privacy)), media_body=media)
+    req = yt.videos().insert(part="snippet,status", body=(body := build_body(title, caption, privacy, shorts, tags)), media_body=media)
     resp = None
     while resp is None:
-        status, resp = req.next_chunk()
+        status, resp = _next_chunk(req)
         if status:
             log.info("YouTube upload %d%%", int(status.progress() * 100))
     vid = resp["id"]; requested = body["status"]["privacyStatus"]
@@ -86,7 +122,7 @@ def upload(path: Path, title: str, caption: str, privacy: str | None = None):
         items = yt.videos().list(part="status", id=vid).execute().get("items", [])
         if items: actual = items[0]["status"].get("privacyStatus", actual)
     except Exception as e: log.warning("YouTube status check failed: %s", e)
-    out = {"id": vid, "url": f"https://youtube.com/shorts/{vid}", "visibility": actual or requested}
+    out = {"id": vid, "url": f"https://youtube.com/shorts/{vid}" if shorts else f"https://www.youtube.com/watch?v={vid}", "visibility": actual or requested}
     w = check_forced_private(requested, actual)
     if w: out["warning"] = w; log.warning("YouTube %s: %s", vid, w)
     return out

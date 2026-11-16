@@ -99,6 +99,7 @@ class InternalPublishRequest(BaseModel):
     platforms: list[str] = Field(default_factory=list)
     public_url: str = ""
     yt_privacy: str | None = None
+    yt_tags: list[str] = Field(default_factory=list)
 
 
 def _internal_publisher_authorized(authorization: str | None) -> bool:
@@ -125,7 +126,8 @@ def publish_from_openshorts(payload: InternalPublishRequest,
         raise HTTPException(status_code=400, detail="choose one or more supported platforms")
     jid = create_job(source, payload.title or source.stem, payload.caption, platforms,
                      payload.public_url.strip(), source="openshorts",
-                     yt_privacy=payload.yt_privacy if payload.yt_privacy in youtube.VISIBILITY else None)
+                     yt_privacy=payload.yt_privacy if payload.yt_privacy in youtube.VISIBILITY else None,
+                     yt_tags=payload.yt_tags)
     log.info("Queued OpenShorts clip %s as publish job %s", source.name, jid)
     return {"job_id": jid, "state": "queued", "status_url": f"/api/internal/jobs/{jid}"}
 
@@ -139,15 +141,15 @@ def internal_job_status(jid: str, authorization: str | None = Header(default=Non
         raise HTTPException(status_code=404, detail="publish job not found")
     return {"id": job["id"], "state": job["state"], "results": job["results"]}
 
-BCOL = {"youtube": "#ff0033", "tiktok": "#25f4ee", "instagram": "#e1306c", "facebook": "#1877f2"}
+BCOL = {"youtube": "#ff0033", "youtube_video": "#ff0033", "tiktok": "#25f4ee", "instagram": "#e1306c", "facebook": "#1877f2"}
 
 @app.get("/", response_class=HTMLResponse)
 def index():
     st = status()
     def stl(p): return "Connected" if st[p]["connected"] else ("Missing keys" if not st[p]["configured"] else "Not connected")
-    pills = "".join(f'<label class="pill" style="--c:{BCOL[p]}"><input type="checkbox" name="platforms" value="{p}" {"checked" if st[p]["connected"] else ""}>{brand(p,26)}'
+    pills = "".join(f'<label class="pill" style="--c:{BCOL[p]}"><input type="checkbox" name="platforms" value="{p}" {"checked" if st[p]["connected"] and p != "youtube_video" else ""}>{brand(p,26)}'
                     f'<span class="nm">{pname(p)}<span class="st">{stl(p)}</span></span><span class="chk"></span></label>' for p in PLATFORMS)
-    plist = "".join(f'<div class="it">{brand(p,24)}<span class="nm">{pname(p)}</span>{status_badge(st[p])}</div>' for p in PLATFORMS)
+    plist = "".join(f'<div class="it">{brand(p,24)}<span class="nm">{pname(p)}</span>{status_badge(st[p])}</div>' for p in PLATFORMS if p != "youtube_video")   # same Google login as Shorts
     upcoming = sorted([j for j in JOBS.values() if j["state"] == "scheduled"], key=lambda j: j["run_at"])[:3]
     up_html = "".join(f'<div class="it">{icon("clock")}<span class="nm" style="font-weight:500">{E(j["title"])}<small style="display:block" data-ts="{j["run_at"]}">{fmt_local(j["run_at"])}</small></span><span class="icons">{"".join(brand(p,18) for p in j["platforms"])}</span></div>' for j in upcoming) or '<p class="muted" style="margin:0">Nothing scheduled yet.</p>'
     ig_warn = "" if env("PUBLIC_BASE_URL") else '<div class="note warn" style="margin-top:12px">Instagram needs a public URL. Set it in Settings (cloudflared tunnel) or paste one under <i>Advanced</i>.</div>'
@@ -156,10 +158,11 @@ def index():
 <div class="field"><div id="drop" class="drop"><input type="file" name="video" accept="video/*">
 <div class="empty"><div class="big">{icon("upload",26)}</div><h2>Drop your video here</h2><p class="muted" style="margin:4px 0 0">or click to browse · MP4, MOV, WebM</p></div>
 <div class="preview"><video muted playsinline controls></video><div><b id="fname"></b><div class="muted" id="fsize"></div><div class="hint">Click or drop to replace</div><div id="shortsCheck" style="margin-top:6px"></div></div></div></div></div>
-<div class="field"><label class="f">Title <span class="muted">· YouTube Shorts &amp; Facebook (#Shorts added automatically)</span></label><input type="text" name="title" maxlength="100" placeholder="My awesome video"></div>
-<div class="field"><label class="f">Caption</label><textarea name="caption" placeholder="Say something… #hashtags work everywhere"></textarea></div>
+<div class="field"><label class="f">Title <span class="muted">· YouTube &amp; Facebook (#Shorts is added only for YouTube Shorts)</span></label><input type="text" name="title" maxlength="100" placeholder="My awesome video"></div>
+<div class="field"><label class="f">Caption <span class="muted">· also the YouTube description</span></label><textarea name="caption" placeholder="Say something… #hashtags work everywhere"></textarea></div>
 <div class="field"><label class="f">Post to</label><div class="pills">{pills}</div></div>
-<div class="field"><label class="f">YouTube Shorts visibility</label><div class="seg">{"".join(f'<label><input type="radio" name="yt_privacy" value="{v}" {"checked" if v == youtube.default_privacy() else ""}>{v.title()}</label>' for v in youtube.VISIBILITY)}</div>
+<div class="field" id="ytTags"><label class="f">YouTube tags <span class="muted">· optional, comma separated (YouTube normal video)</span></label><input type="text" name="yt_tags" maxlength="500" placeholder="travel, vlog, how to"></div>
+<div class="field"><label class="f">YouTube visibility <span class="muted">· Shorts &amp; normal video</span></label><div class="seg">{"".join(f'<label><input type="radio" name="yt_privacy" value="{v}" {"checked" if v == youtube.default_privacy() else ""}>{v.title()}</label>' for v in youtube.VISIBILITY)}</div>
 <div class="hint">Facebook, Instagram and TikTok post publicly (TikTok falls back to the most public option your app is allowed).</div></div>
 <div class="field"><label class="f">When</label><div class="seg"><label><input type="radio" name="when" value="now" checked>{icon("bolt",16)} Post now</label><label><input type="radio" name="when" value="schedule">{icon("calendar",16)} Schedule</label></div>
 <div id="whenAt" class="when-at"><input type="datetime-local" name="run_at"><div class="quick"><button type="button" data-quick="1h">In 1 hour</button><button type="button" data-quick="3h">In 3 hours</button><button type="button" data-quick="0@18">Today 18:00</button><button type="button" data-quick="1@9">Tomorrow 09:00</button><button type="button" data-quick="1@18">Tomorrow 18:00</button></div><div class="hint">Your computer's local time.</div></div></div>
@@ -173,7 +176,7 @@ def index():
 @app.post("/upload")
 async def upload(video: UploadFile = File(...), title: str = Form(""), caption: str = Form(""),
                  platforms: list[str] = Form([]), public_url: str = Form(""),
-                 when: str = Form("now"), run_at: str = Form(""), yt_privacy: str = Form("")):
+                 when: str = Form("now"), run_at: str = Form(""), yt_privacy: str = Form(""), yt_tags: str = Form("")):
     plats = [p for p in platforms if p in PLATFORMS]
     if not plats: return err_page("Error", "Pick at least one platform.")
     ts = None
@@ -184,7 +187,7 @@ async def upload(video: UploadFile = File(...), title: str = Form(""), caption: 
     dest = ROOT / "uploads" / f"{int(time.time())}_{Path(video.filename or 'video.mp4').name}"
     with open(dest, "wb") as f: shutil.copyfileobj(video.file, f)
     jid = create_job(dest, title or Path(video.filename or "video").stem, caption, plats, public_url.strip(), run_at=ts,
-                     yt_privacy=yt_privacy if yt_privacy in youtube.VISIBILITY else None)
+                     yt_privacy=yt_privacy if yt_privacy in youtube.VISIBILITY else None, yt_tags=yt_tags)
     return RedirectResponse("/scheduled?t=scheduled" if ts else f"/jobs/{jid}?t=uploaded", status_code=303)
 
 def _progress(j):
@@ -227,7 +230,7 @@ def job_page(jid: str):
     body = f"""<div class="grid g-main"><div class="card"><div class="row between"><h2>Progress</h2>{lab}</div><div class="bar {cls}"><div style="width:{pct}%"></div></div>{when}{_results(j, big=True)}</div>
 <div class="card"><h2 style="margin-bottom:14px">Details</h2><div class="field"><label class="f">File</label><code>{E(j["file"])}</code></div>
 <div class="field"><label class="f">Created</label><span class="muted">{E(j["created"])} · {_src(j)}</span></div>
-<div class="field"><label class="f">Caption</label><div class="note" style="white-space:pre-wrap">{E(j.get("caption") or "—")}</div></div></div></div>"""
+<div class="field"><label class="f">Caption</label><div class="note" style="white-space:pre-wrap">{E(j.get("caption") or "—")}</div></div>{f'<div class="field"><label class="f">YouTube tags</label><span class="muted">{E(", ".join(j["yt_tags"]))}</span></div>' if j.get("yt_tags") else ""}</div></div>"""
     return page(E(j["title"] or j["file"]), body, active="/jobs", subtitle=f"Job {E(jid)}",
                 refresh=j["state"] in ("queued", "running"), actions='<a class="btn" href="/jobs">All jobs</a>')
 
