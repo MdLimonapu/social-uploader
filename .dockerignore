@@ -1,0 +1,14 @@
+.env
+.env.*
+client_secret*.json
+tokens/
+uploads/
+logs/
+data/
+inbox/
+done/
+failed/
+.venv/
+.git/
+tests/
+__pycache__/
