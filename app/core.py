@@ -3,10 +3,10 @@ import json, secrets, shutil, threading, time, uuid
 from datetime import datetime
 from pathlib import Path
 from .config import ROOT, env, log, VIDEO_EXT
-from .platforms import youtube, tiktok, meta, instagram
+from .platforms import youtube, tiktok, meta, instagram, x
 
 # "youtube" = YouTube Shorts (checked + #Shorts), "youtube_video" = normal long-form YouTube video (same Google login)
-PLATFORMS = ["youtube", "youtube_video", "tiktok", "instagram", "facebook"]
+PLATFORMS = ["youtube", "youtube_video", "tiktok", "instagram", "facebook", "x"]
 DB = ROOT / "data" / "jobs.json"
 JOBS: dict = {}
 PUBLIC_FILES: dict = {}
@@ -39,6 +39,7 @@ def status():
         "facebook": {"configured": meta.configured(), "connected": meta.fb_connected()},
         "instagram": {"configured": instagram.configured() or meta.configured(), "connected": instagram.connected() or meta.ig_connected(),
                       "public_url": bool(env("PUBLIC_BASE_URL")), "via": "instagram_login" if instagram.connected() else ("facebook_page" if meta.ig_connected() else "")},
+        "x": {"configured": x.configured(), "connected": x.connected()},
     }
 
 def _public_url(path: Path, override=""):
@@ -56,6 +57,7 @@ def upload_one(p, path, title, caption, public_url, yt_privacy=None, yt_tags=Non
     if p == "instagram":   # default: Instagram Login (no FB Page); fallback: FB-Page-linked IG account
         if instagram.connected() or not meta.ig_connected(): return instagram.upload(path, title, caption, _public_url(path, public_url))
         return meta.upload_instagram(path, title, caption, _public_url(path, public_url))
+    if p == "x": return x.upload(path, title, caption)
     raise RuntimeError("unknown platform")
 
 def _move_after(j):

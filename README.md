@@ -1,6 +1,6 @@
 # Social Uploader (free, self-hosted, runs on your PC)
 
-Drop in a video + caption → it posts to **YouTube, TikTok, Instagram (Reels) and Facebook (Page)** using the official APIs only. No paid services.
+Drop in a video + caption → it posts to **YouTube, TikTok, Instagram (Reels), Facebook (Page) and X** using the official APIs only. No paid services.
 
 ## 1. Start the app
 1. Install **Python 3.10+** (python.org – on Windows tick "Add Python to PATH").
@@ -19,7 +19,8 @@ On the Upload page choose **Schedule** and pick a date and time (your Mac's loca
 ## 2c. How to use
 - **Upload page**: choose video, title, caption, tick platforms → Upload. You'll see a live status per platform.
 - **YouTube Shorts vs. YouTube (normal video)**: both use the same YouTube connection. *Shorts* checks the video is vertical and ≤ 3 min and adds `#Shorts`. *Normal video* skips those checks, never adds `#Shorts`, keeps your full title (max 100 chars) and caption as the description (max 5,000), and uses the optional **YouTube tags** field. Both use the YouTube visibility setting and upload in resumable 8 MB chunks streamed from disk, so long/large videos don't need much RAM.
-- **Watch folder**: put `myvideo.mp4` into `inbox/`. Optional `myvideo.txt` next to it: *line 1 = title, rest = caption/hashtags*. Optional lines `tags: a, b` (YouTube tags) and `schedule: …`. It posts to `WATCH_PLATFORMS` (`youtube` = Shorts, `youtube_video` = normal video) and then moves to `done/` (or `failed/` if every platform failed — check **Logs**).
+- **X**: uses the same title/caption form. The post text is the caption (or the title if the caption is empty), truncated to 280 characters at a word boundary when needed. Connect X once in Settings; then tick **X** under *Post to*.
+- **Watch folder**: put `myvideo.mp4` into `inbox/`. Optional `myvideo.txt` next to it: *line 1 = title, rest = caption/hashtags*. Optional lines `tags: a, b` (YouTube tags) and `schedule: …`. It posts to `WATCH_PLATFORMS` (`youtube` = Shorts, `youtube_video` = normal video, `x` = X) and then moves to `done/` (or `failed/` if every platform failed — check **Logs**).
 - **Jobs** page = history (kept until restart). **Logs** page = `logs/app.log`.
 - Disconnect a platform: delete its file in `tokens/`.
 
@@ -78,6 +79,17 @@ Needs: a **Facebook Page**, and for Instagram an **Instagram Business or Creator
 - Alternative: create a Page token in *Graph API Explorer* and paste it into `FB_PAGE_ACCESS_TOKEN` + `FB_PAGE_ID` + `IG_USER_ID`.
 - App stays in **Development mode** — fine since you're the admin posting to your own Page/IG.
 
+### X (developer.x.com)
+1. Go to https://developer.x.com → sign in → *Developer Portal* → create a Project and an App (or open an existing one).
+2. In the app settings, enable **OAuth 2.0** user authentication. Choose type **Web App**.
+3. Set the **Callback URI / Redirect URL** to `{BASE_URL}/oauth/x/callback` — locally that is `http://localhost:8000/oauth/x/callback`; on Render it is `https://<name>.onrender.com/oauth/x/callback`.
+4. Add a **Website URL** (your app URL, e.g. `http://localhost:8000` or the Render URL).
+5. Copy the **Client ID** and **Client Secret**. Paste them in Settings → X (or into `.env` as `X_CLIENT_ID` / `X_CLIENT_SECRET`). The secret is required for confidential Web apps and optional for public clients.
+6. Request these scopes: `tweet.read tweet.write users.read media.write offline.access`.
+7. Settings → X → **Save** → **Connect**, then approve access. The login is stored in `tokens/x.json` and refreshed automatically with the refresh token.
+- The app uploads the video with X API v2 chunked media upload (`initialize` / `append` / `finalize`, then status polling) and creates a post with the media attached. Captions are limited to 280 characters. Free/basic X API access has rate and posting limits; check your developer plan if a post is rejected.
+- On Render's free plan the disk is wiped on restart, so after a successful Connect you can paste `tokens/x.json` into the `X_TOKEN_JSON` environment variable if you want the login to survive redeploys.
+
 ### Instagram needs a public URL (important!)
 Instagram's API cannot receive a file from your PC; it **downloads the video from a public https link**. Free option – Cloudflare quick tunnel:
 1. Install `cloudflared` (https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/).
@@ -93,7 +105,7 @@ The app only exposes the video being posted, under a random secret link, and rem
 - Run tests: `.venv/bin/python -m pytest tests` (Windows: `.venv\Scripts\python -m pytest tests`, after `pip install pytest`).
 
 ## Files
-`app/main.py` web UI & routes · `app/core.py` jobs + watch folder · `app/platforms/` youtube.py, tiktok.py, meta.py · `tokens/` saved logins (keep private!) · `.env` your keys (keep private!).
+`app/main.py` web UI & routes · `app/core.py` jobs + watch folder · `app/platforms/` youtube.py, tiktok.py, meta.py, instagram.py, x.py · `tokens/` saved logins (keep private!) · `.env` your keys (keep private!).
 
 ## 5. Always-on on a Linux VM (Google Cloud) with cloudflared
 
@@ -114,10 +126,10 @@ The app runs on Render's **free** web service using the `Dockerfile`. When Rende
 - refuses to start without `APP_PASSWORD` (the URL is public);
 - exposes `GET /healthz` (no login) for Render's health check.
 
-**Environment variables to set in Render** (never commit them): `APP_PASSWORD`, `SESSION_SECRET` (any long random string, keeps you signed in across restarts), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `INSTAGRAM_ACCESS_TOKEN`, `INSTAGRAM_USER_ID`, `YOUTUBE_PRIVACY`, `GRAPH_VERSION`, optional TikTok/Facebook keys.
+**Environment variables to set in Render** (never commit them): `APP_PASSWORD`, `SESSION_SECRET` (any long random string, keeps you signed in across restarts), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `INSTAGRAM_ACCESS_TOKEN`, `INSTAGRAM_USER_ID`, `YOUTUBE_PRIVACY`, `GRAPH_VERSION`, optional TikTok/Facebook keys, and for X: `X_CLIENT_ID`, `X_CLIENT_SECRET` (optional for public clients).
 Because the free disk is wiped on every restart, logins can be restored at start-up from these optional variables (paste the whole JSON file content):
-`YOUTUBE_TOKEN_JSON` → `tokens/youtube.json`, `INSTAGRAM_TOKEN_JSON` → `tokens/instagram.json`, `GOOGLE_CLIENT_SECRET_JSON` → `client_secret.json` (otherwise it is built from `GOOGLE_CLIENT_ID`/`SECRET`).
+`YOUTUBE_TOKEN_JSON` → `tokens/youtube.json`, `INSTAGRAM_TOKEN_JSON` → `tokens/instagram.json`, `X_TOKEN_JSON` → `tokens/x.json`, `GOOGLE_CLIENT_SECRET_JSON` → `client_secret.json` (otherwise it is built from `GOOGLE_CLIENT_ID`/`SECRET`).
 
-Register these redirect URIs with the platforms: `https://<name>.onrender.com/oauth/youtube/callback` (Google Cloud → Credentials → your Web client), `https://<name>.onrender.com/oauth/instagram/callback` (Meta app → Instagram → Business login settings), and the `/oauth/tiktok/callback` / `/oauth/meta/callback` ones if you use them.
+Register these redirect URIs with the platforms: `https://<name>.onrender.com/oauth/youtube/callback` (Google Cloud → Credentials → your Web client), `https://<name>.onrender.com/oauth/instagram/callback` (Meta app → Instagram → Business login settings), `https://<name>.onrender.com/oauth/x/callback` (X Developer Portal → app → User authentication settings), and the `/oauth/tiktok/callback` / `/oauth/meta/callback` ones if you use them.
 
 **Free plan limits:** the service sleeps after ~15 minutes without visits (the first visit takes ~1 minute to wake it), so scheduled posts only go out while it is awake. Files, uploads, job history and anything saved on the Settings page are lost on every restart or redeploy. Put permanent settings in Render's environment variables instead. After clicking **Connect** again, copy the new `tokens/*.json` into the matching `*_TOKEN_JSON` variable if you want it to survive restarts.

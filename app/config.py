@@ -38,6 +38,7 @@ def _seed_files():
     """Ephemeral disks (Render free): recreate logins/secrets from env vars when the files are missing."""
     tok = ROOT / "tokens"
     seeds = {tok / "youtube.json": "YOUTUBE_TOKEN_JSON", tok / "instagram.json": "INSTAGRAM_TOKEN_JSON",
+             tok / "x.json": "X_TOKEN_JSON",
              ROOT / (env("YOUTUBE_CLIENT_SECRET_FILE", "client_secret.json") or "client_secret.json"): "GOOGLE_CLIENT_SECRET_JSON"}
     for path, key in seeds.items():
         val = os.getenv(key, "").strip()

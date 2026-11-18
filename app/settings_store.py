@@ -21,6 +21,8 @@ FIELDS = [
     ("INSTAGRAM_USER_ID", "Instagram user ID (with pasted token)", False, "instagram"),
     ("BASE_URL", "App base URL (https tunnel if Meta rejects localhost)", False, "instagram"),
     ("PUBLIC_BASE_URL", "Public base URL for Instagram (https://…trycloudflare.com)", False, "instagram"),
+    ("X_CLIENT_ID", "X Client ID", False, "x"),
+    ("X_CLIENT_SECRET", "X Client Secret (optional for public clients)", True, "x"),
     ("WATCH_PLATFORMS", "Watch-folder platforms (comma separated)", False, "watch"),
 ]
 KEYS = {f[0] for f in FIELDS}

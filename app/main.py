@@ -8,7 +8,7 @@ from .core import (PLATFORMS, JOBS, PUBLIC_FILES, status, create_job, watch_loop
                    parse_local, fmt_local, cancel, reschedule)
 from . import settings_store
 from .config import BASE_URL
-from .platforms import youtube, tiktok, meta, instagram
+from .platforms import youtube, tiktok, meta, instagram, x
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from .ui import layout, icon, brand, pname, status_badge, state_badge, E
@@ -141,7 +141,7 @@ def internal_job_status(jid: str, authorization: str | None = Header(default=Non
         raise HTTPException(status_code=404, detail="publish job not found")
     return {"id": job["id"], "state": job["state"], "results": job["results"]}
 
-BCOL = {"youtube": "#ff0033", "youtube_video": "#ff0033", "tiktok": "#25f4ee", "instagram": "#e1306c", "facebook": "#1877f2"}
+BCOL = {"youtube": "#ff0033", "youtube_video": "#ff0033", "tiktok": "#25f4ee", "instagram": "#e1306c", "facebook": "#1877f2", "x": "#000"}
 
 @app.get("/", response_class=HTMLResponse)
 def index():
@@ -163,7 +163,7 @@ def index():
 <div class="field"><label class="f">Post to</label><div class="pills">{pills}</div></div>
 <div class="field" id="ytTags"><label class="f">YouTube tags <span class="muted">· optional, comma separated (YouTube normal video)</span></label><input type="text" name="yt_tags" maxlength="500" placeholder="travel, vlog, how to"></div>
 <div class="field"><label class="f">YouTube visibility <span class="muted">· Shorts &amp; normal video</span></label><div class="seg">{"".join(f'<label><input type="radio" name="yt_privacy" value="{v}" {"checked" if v == youtube.default_privacy() else ""}>{v.title()}</label>' for v in youtube.VISIBILITY)}</div>
-<div class="hint">Facebook, Instagram and TikTok post publicly (TikTok falls back to the most public option your app is allowed).</div></div>
+<div class="hint">Facebook, Instagram, TikTok and X post publicly (TikTok falls back to the most public option your app is allowed). X uses the caption (or the title if the caption is empty), truncated to 280 characters.</div></div>
 <div class="field"><label class="f">When</label><div class="seg"><label><input type="radio" name="when" value="now" checked>{icon("bolt",16)} Post now</label><label><input type="radio" name="when" value="schedule">{icon("calendar",16)} Schedule</label></div>
 <div id="whenAt" class="when-at"><input type="datetime-local" name="run_at"><div class="quick"><button type="button" data-quick="1h">In 1 hour</button><button type="button" data-quick="3h">In 3 hours</button><button type="button" data-quick="0@18">Today 18:00</button><button type="button" data-quick="1@9">Tomorrow 09:00</button><button type="button" data-quick="1@18">Tomorrow 18:00</button></div><div class="hint">Your computer's local time.</div></div></div>
 <details style="margin-bottom:18px"><summary class="muted" style="cursor:pointer">Advanced</summary><div class="field" style="margin-top:10px"><label class="f">Public https URL of this video <span class="muted">· Instagram only, optional</span></label><input type="url" name="public_url" placeholder="https://…/video.mp4"></div></details>
@@ -246,12 +246,14 @@ def api_status(): return JSONResponse({"platforms": status(), "jobs": list(JOBS.
 
 NEXT = {"youtube": "YouTube Shorts saved – now click Connect on the YouTube Shorts card.", "tiktok": "TikTok saved – now click Connect on the TikTok card.",
         "meta": "Meta saved – now click Connect on the Facebook card (also links Instagram).",
-        "instagram": "Instagram saved – now click Connect on the Instagram card (log in as your professional account).", "watch": "Watch folder platforms updated."}
+        "instagram": "Instagram saved – now click Connect on the Instagram card (log in as your professional account).",
+        "x": "X saved – now click Connect on the X card.", "watch": "Watch folder platforms updated."}
 CARDS = [("youtube", "YouTube Shorts", ["youtube"], "youtube", "Google OAuth · Data API v3 · vertical, ≤ 3 min, #Shorts added"),
          ("tiktok", "TikTok", ["tiktok"], "tiktok", "Content Posting API"),
          ("facebook", "Facebook Page", ["meta"], "meta", "Graph API · Page videos"),
-         ("instagram", "Instagram Reels", ["instagram"], "instagram", "Instagram API with Instagram Login · no Facebook Page needed")]
-REDIR = {"instagram": instagram.redirect_uri, "youtube": lambda: youtube.REDIRECT, "tiktok": lambda: tiktok.REDIRECT, "meta": lambda: meta.REDIRECT}
+         ("instagram", "Instagram Reels", ["instagram"], "instagram", "Instagram API with Instagram Login · no Facebook Page needed"),
+         ("x", "X", ["x"], "x", "X API v2 · OAuth 2.0 + video posts")]
+REDIR = {"instagram": instagram.redirect_uri, "youtube": lambda: youtube.REDIRECT, "tiktok": lambda: tiktok.REDIRECT, "meta": lambda: meta.REDIRECT, "x": x.redirect_uri}
 
 def _field(key, label, secret, val):
     if key == "YOUTUBE_PRIVACY":
@@ -271,7 +273,13 @@ def settings(toasts=None, open_=None):
         extra = {"youtube": '<div class="field"><label class="f">…or upload <code>client_secret.json</code></label><input class="file-in" type="file" name="client_json" accept=".json"></div>',
                  "instagram": (f'<div class="note" style="margin-bottom:8px">Connected as <b>@{E(instagram.username() or "?")}</b> via {"pasted access token" if instagram.manual_set() else "Instagram Login"}.</div>' if instagram.connected() else "") + '<div class="note">Works with an Instagram professional (Business/Creator) account – no Facebook Page needed. Either Save app ID + secret and click Connect, <b>or</b> just paste an existing long-lived access token + user ID (no app secret needed). Instagram downloads the video from a public https URL, so set <code>PUBLIC_BASE_URL</code> to a tunnel (e.g. <code>cloudflared tunnel --url http://localhost:8000</code>). If Meta rejects the http://localhost redirect, set <code>BASE_URL</code> to your https tunnel too and register that redirect URI. Fallback: an IG account linked to a Facebook Page (Facebook card) still works.</div>',
                  "tiktok": f'<div class="note">Posts use <code>{E(env("TIKTOK_PRIVACY","PUBLIC_TO_EVERYONE") or "PUBLIC_TO_EVERYONE")}</code> when your account allows it. Unaudited apps can only post privately (SELF_ONLY) – you\'ll see a warning on the job.</div>',
-                 "facebook": ""}[cid]
+                 "facebook": "",
+                 "x": (
+                    (f'<div class="note" style="margin-bottom:8px">Connected as <b>@{E(x.username() or "?")}</b>.</div>' if x.connected() else "")
+                    + ('<div class="note warn">X_CLIENT_ID is missing. Create an app at <a href="https://developer.x.com" target="_blank" rel="noopener">developer.x.com</a>, enable OAuth 2.0 user authentication (Web App), set the callback URL above, then paste the Client ID here (and the Client Secret if your app is confidential). Save, then Connect.</div>'
+                       if not s["configured"] else
+                       '<div class="note">Uses OAuth 2.0 with PKCE. Scopes: <code>tweet.read tweet.write users.read media.write offline.access</code>. Videos are uploaded in chunks and posted with the caption (max 280 characters).</div>')
+                 )}[cid]
         uri = REDIR[oauth]()
         connect = (f'<a class="btn" href="/connect/{oauth}">{icon("link",15)} {"Reconnect" if s["connected"] else "Connect"}</a>' if s["configured"]
                    else f'<button class="btn" type="button" disabled title="Save keys first">{icon("link",15)} Connect</button>')
@@ -302,7 +310,7 @@ async def settings_save(request: Request):
         return settings([["bad", f"Save failed: {e}"]], {card})
     plats = {f[3] for f in settings_store.FIELDS if f[0] in changed}
     if "client_secret.json" in changed: plats.add("youtube")
-    toasts = [["ok", NEXT[p]] for p in ["youtube", "tiktok", "meta", "instagram", "watch"] if p in plats and not (p == "instagram" and {"INSTAGRAM_ACCESS_TOKEN", "INSTAGRAM_USER_ID"} & set(changed))]
+    toasts = [["ok", NEXT[p]] for p in ["youtube", "tiktok", "meta", "instagram", "x", "watch"] if p in plats and not (p == "instagram" and {"INSTAGRAM_ACCESS_TOKEN", "INSTAGRAM_USER_ID"} & set(changed))]
     if {"INSTAGRAM_ACCESS_TOKEN", "INSTAGRAM_USER_ID"} & set(changed) and instagram.manual_set():
         try:
             t = instagram.seed_manual()
@@ -350,7 +358,7 @@ def sched_resched(jid: str, run_at: str = Form(...)):
 @app.get("/connect/{name}")
 def connect(name: str):
     try:
-        url = {"instagram": instagram.auth_url, "youtube": youtube.auth_url, "tiktok": tiktok.auth_url, "meta": meta.auth_url}[name]()
+        url = {"instagram": instagram.auth_url, "youtube": youtube.auth_url, "tiktok": tiktok.auth_url, "meta": meta.auth_url, "x": x.auth_url}[name]()
         return RedirectResponse(url)
     except Exception as e:
         log.exception("connect %s", name); return err_page("Connect error", str(e), "/settings")
@@ -363,6 +371,7 @@ def oauth_cb(name: str, request: Request, code: str = "", state: str = "", error
         elif name == "tiktok": tiktok.callback(code, state)
         elif name == "meta": meta.callback(code, state)
         elif name == "instagram": instagram.callback(code, state)
+        elif name == "x": x.callback(code, state)
         log.info("Connected %s", name); return RedirectResponse("/settings?t=connected")
     except Exception as e:
         log.exception("oauth %s", name); return err_page("Connect failed", str(e), "/settings")
